@@ -1,0 +1,108 @@
+name: Deploy cf-mcp-client to Cloud Foundry
+
+on:
+  # Poll for new releases every 6 hours
+  schedule:
+    - cron: '0 */6 * * *'
+  # Allow manual trigger with optional version override
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to deploy (e.g., v2.7.0). Leave empty to deploy latest.'
+        required: false
+        type: string
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      new_release: ${{ steps.check.outputs.new_release }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
+      jar_name: ${{ steps.check.outputs.jar_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for new release
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            RELEASE_TAG="${{ inputs.release_tag }}"
+          else
+            RELEASE_TAG=$(gh api repos/cpage-pivotal/cf-mcp-client/releases/latest --jq '.tag_name')
+          fi
+
+          echo "Target release: $RELEASE_TAG"
+
+          # Check last deployed version
+          LAST_DEPLOYED=""
+          if [ -f .last-deployed-version ]; then
+            LAST_DEPLOYED=$(cat .last-deployed-version)
+          fi
+
+          echo "Last deployed: ${LAST_DEPLOYED:-none}"
+
+          # Skip if already deployed (unless manually triggered with a specific tag)
+          if [ "$RELEASE_TAG" = "$LAST_DEPLOYED" ] && [ -z "${{ inputs.release_tag }}" ]; then
+            echo "Already deployed $RELEASE_TAG — skipping."
+            echo "new_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New release detected: $RELEASE_TAG"
+            echo "new_release=true" >> "$GITHUB_OUTPUT"
+            echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+            VERSION=${RELEASE_TAG#v}
+            echo "jar_name=cf-mcp-client-${VERSION}.jar" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: check-release
+    if: needs.check-release.outputs.new_release == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_TAG="${{ needs.check-release.outputs.release_tag }}"
+          JAR_NAME="${{ needs.check-release.outputs.jar_name }}"
+
+          echo "Downloading assets for release $RELEASE_TAG ..."
+          gh release download "$RELEASE_TAG" \
+            --repo cpage-pivotal/cf-mcp-client \
+            --pattern "$JAR_NAME" \
+            --pattern "manifest.yml" \
+            --dir ./deploy
+
+          echo "Downloaded artifacts:"
+          ls -la ./deploy/
+
+      - name: Install CF CLI
+        run: |
+          curl -sL "https://packages.cloudfoundry.org/stable?release=linux64-binary&version=v8&source=github" | tar -zx
+          sudo mv cf8 /usr/local/bin/cf
+          cf version
+
+      - name: Deploy to Cloud Foundry
+        run: |
+          cf api "${{ secrets.CF_API }}"
+          cf auth "${{ secrets.CF_USERNAME }}" "${{ secrets.CF_PASSWORD }}"
+          cf target -o "${{ secrets.CF_ORG }}" -s "${{ secrets.CF_SPACE }}"
+
+          cd deploy
+          cf push -f manifest.yml -p "${{ needs.check-release.outputs.jar_name }}"
+
+      - name: Record deployed version
+        run: |
+          RELEASE_TAG="${{ needs.check-release.outputs.release_tag }}"
+          echo "$RELEASE_TAG" > .last-deployed-version
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .last-deployed-version
+          git diff --cached --quiet || git commit -m "Record deployment of $RELEASE_TAG"
+          git push
