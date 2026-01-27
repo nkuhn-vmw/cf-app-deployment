@@ -21,6 +21,8 @@ Configure these in **Settings > Secrets and variables > Actions**:
 | `CF_PASSWORD` | Cloud Foundry password |
 | `CF_ORG` | Cloud Foundry organization |
 | `CF_SPACE` | Cloud Foundry space |
+| `CF_APP_NAME` | Custom application name (used as app name and route hostname) |
+| `CF_APP_DOMAIN` | CF apps domain (e.g. `apps.sys.example.com`) — route will be `CF_APP_NAME.CF_APP_DOMAIN` |
 
 ## Environment setup
 

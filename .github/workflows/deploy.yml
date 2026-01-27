@@ -87,6 +87,30 @@ jobs:
           sudo mv cf8 /usr/local/bin/cf
           cf version
 
+      - name: Customize manifest
+        run: |
+          APP_NAME="${{ secrets.CF_APP_NAME }}"
+          APP_DOMAIN="${{ secrets.CF_APP_DOMAIN }}"
+          JAR_NAME="${{ needs.check-release.outputs.jar_name }}"
+
+          cat > ./deploy/manifest.yml <<EOF
+          ---
+          applications:
+            - name: ${APP_NAME}
+              buildpacks:
+                - java_buildpack_offline
+              memory: 1G
+              instances: 1
+              path: ${JAR_NAME}
+              routes:
+                - route: ${APP_NAME}.${APP_DOMAIN}
+              env:
+                JBP_CONFIG_OPEN_JDK_JRE: '{ jre: { version: 21.+ } }'
+          EOF
+
+          echo "Custom manifest:"
+          cat ./deploy/manifest.yml
+
       - name: Deploy to Cloud Foundry
         run: |
           cf api "${{ secrets.CF_API }}"
