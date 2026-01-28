@@ -22,6 +22,7 @@ jobs:
       new_release: ${{ steps.check.outputs.new_release }}
       release_tag: ${{ steps.check.outputs.release_tag }}
       jar_name: ${{ steps.check.outputs.jar_name }}
+      version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +58,7 @@ jobs:
 
             VERSION=${RELEASE_TAG#v}
             echo "jar_name=cf-mcp-client-${VERSION}.jar" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           fi
 
   deploy-dev:
@@ -96,7 +98,7 @@ jobs:
           cf target -o "${{ secrets.CF_ORG }}" -s "${{ secrets.CF_DEV_SPACE }}"
 
           cd deploy
-          cf push automated-cf-mcp-client-dev -f manifest.yml -p "${{ needs.check-release.outputs.jar_name }}"
+          cf push "cf-mcp-client-dev-${{ needs.check-release.outputs.version }}" -f manifest.yml -p "${{ needs.check-release.outputs.jar_name }}"
 
   deploy-prod:
     needs: [check-release, deploy-dev]
@@ -136,7 +138,7 @@ jobs:
           cf target -o "${{ secrets.CF_ORG }}" -s "${{ secrets.CF_PROD_SPACE }}"
 
           cd deploy
-          cf push automated-cf-mcp-client -f manifest.yml -p "${{ needs.check-release.outputs.jar_name }}"
+          cf push "cf-mcp-client-prod-${{ needs.check-release.outputs.version }}" -f manifest.yml -p "${{ needs.check-release.outputs.jar_name }}"
 
       - name: Record deployed version
         run: |
