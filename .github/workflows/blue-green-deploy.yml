@@ -1,0 +1,317 @@
+name: Blue-Green Deployment to Cloud Foundry
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to deploy (e.g., v2.7.0). Leave empty to deploy latest.'
+        required: false
+        type: string
+      skip_nonprod:
+        description: 'Skip nonprod deployment (deploy directly to prod)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      new_release: ${{ steps.check.outputs.new_release }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
+      jar_name: ${{ steps.check.outputs.jar_name }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for new release
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_REPO: ${{ secrets.APP_UPSTREAM_REPO }}
+        run: |
+          if [ -z "$UPSTREAM_REPO" ]; then
+            echo "Error: APP_UPSTREAM_REPO secret is not set"
+            exit 1
+          fi
+
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            RELEASE_TAG="${{ inputs.release_tag }}"
+          else
+            RELEASE_TAG=$(gh api repos/${UPSTREAM_REPO}/releases/latest --jq '.tag_name')
+          fi
+
+          echo "Target release: $RELEASE_TAG"
+
+          LAST_DEPLOYED=""
+          if [ -f .last-deployed-version ]; then
+            LAST_DEPLOYED=$(cat .last-deployed-version)
+          fi
+
+          echo "Last deployed: ${LAST_DEPLOYED:-none}"
+
+          # Check if there's already a run waiting for prod approval
+          WAITING_RUNS=$(gh api repos/${{ github.repository }}/actions/runs \
+            --jq "[.workflow_runs[] | select(.status == \"waiting\" and .id != ${{ github.run_id }})] | length")
+          echo "Runs waiting for approval: $WAITING_RUNS"
+
+          if [ "$WAITING_RUNS" -gt 0 ]; then
+            echo "A deployment is already pending approval — skipping."
+            echo "new_release=false" >> "$GITHUB_OUTPUT"
+          elif [ "$RELEASE_TAG" = "$LAST_DEPLOYED" ] && [ -z "${{ inputs.release_tag }}" ]; then
+            echo "Already deployed $RELEASE_TAG — skipping."
+            echo "new_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New release detected: $RELEASE_TAG"
+            echo "new_release=true" >> "$GITHUB_OUTPUT"
+            echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+            VERSION=${RELEASE_TAG#v}
+            APP_VERSION=${VERSION//./-}
+            echo "jar_name=${{ secrets.APP_NAME }}-${VERSION}.jar" >> "$GITHUB_OUTPUT"
+            echo "version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download release assets
+        if: steps.check.outputs.new_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_REPO: ${{ secrets.APP_UPSTREAM_REPO }}
+        run: |
+          gh release download "${{ steps.check.outputs.release_tag }}" \
+            --repo ${UPSTREAM_REPO} \
+            --pattern "${{ steps.check.outputs.jar_name }}" \
+            --pattern "manifest.yml" \
+            --dir ./artifacts
+
+      - name: Upload artifacts
+        if: steps.check.outputs.new_release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: ./artifacts/
+          retention-days: 1
+
+  deploy-nonprod:
+    needs: check-release
+    if: needs.check-release.outputs.new_release == 'true' && inputs.skip_nonprod != true
+    runs-on: ubuntu-latest
+    outputs:
+      previous_app: ${{ steps.blue-green.outputs.previous_app }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+
+      - name: Install CF CLI
+        run: |
+          curl -sL "https://packages.cloudfoundry.org/stable?release=linux64-binary&version=v8&source=github" | tar -zx
+          chmod +x cf8
+
+      - name: Authenticate to Nonprod CF Foundation
+        run: |
+          ./cf8 api "${{ secrets.CF_NONPROD_API }}"
+          ./cf8 auth "${{ secrets.CF_NONPROD_USERNAME }}" "${{ secrets.CF_NONPROD_PASSWORD }}"
+          ./cf8 target -o "${{ secrets.CF_NONPROD_ORG }}" -s "${{ secrets.CF_NONPROD_SPACE }}"
+
+      - name: Blue-Green Deploy to Nonprod
+        id: blue-green
+        env:
+          APP_NAME: ${{ secrets.APP_NAME }}
+          APP_ROUTE: ${{ secrets.APP_ROUTE_NONPROD }}
+        run: |
+          GREEN_APP="${APP_NAME}-nonprod-${{ needs.check-release.outputs.version }}"
+          BLUE_APP=""
+
+          # Find current running app (blue) by looking for apps with the production route
+          echo "Looking for existing app with route: ${APP_ROUTE}"
+          EXISTING_APPS=$(./cf8 apps | grep "${APP_NAME}-nonprod" | awk '{print $1}' || true)
+
+          if [ -n "$EXISTING_APPS" ]; then
+            for app in $EXISTING_APPS; do
+              if [ "$app" != "$GREEN_APP" ]; then
+                APP_ROUTES=$(./cf8 app "$app" | grep "routes:" || true)
+                if echo "$APP_ROUTES" | grep -q "$APP_ROUTE"; then
+                  BLUE_APP="$app"
+                  echo "Found blue app: $BLUE_APP"
+                  break
+                fi
+              fi
+            done
+          fi
+
+          echo "previous_app=${BLUE_APP}" >> "$GITHUB_OUTPUT"
+
+          # Deploy the new version (green)
+          echo "Deploying green app: $GREEN_APP"
+          ./cf8 push "$GREEN_APP" \
+            -f manifest.yml \
+            -p "${{ needs.check-release.outputs.jar_name }}" \
+            --no-route
+
+          # Wait for app to start and verify health
+          echo "Waiting for app to start..."
+          sleep 10
+
+          APP_STATE=$(./cf8 app "$GREEN_APP" | grep "#0" | awk '{print $2}')
+          if [ "$APP_STATE" != "running" ]; then
+            echo "Error: Green app failed to start. State: $APP_STATE"
+            ./cf8 logs "$GREEN_APP" --recent
+            exit 1
+          fi
+
+          echo "Green app is running. Mapping production route..."
+
+          # Map the production route to green
+          ./cf8 map-route "$GREEN_APP" "$APP_ROUTE"
+
+          # If there's a blue app, unmap its route and optionally stop it
+          if [ -n "$BLUE_APP" ]; then
+            echo "Unmapping route from blue app: $BLUE_APP"
+            ./cf8 unmap-route "$BLUE_APP" "$APP_ROUTE" || true
+
+            echo "Stopping blue app: $BLUE_APP"
+            ./cf8 stop "$BLUE_APP" || true
+          fi
+
+          echo "Blue-green deployment to nonprod complete!"
+
+  deploy-prod:
+    needs: [check-release, deploy-nonprod]
+    if: |
+      always() &&
+      needs.check-release.outputs.new_release == 'true' &&
+      (needs.deploy-nonprod.result == 'success' || inputs.skip_nonprod == true)
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      previous_app: ${{ steps.blue-green.outputs.previous_app }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+
+      - name: Install CF CLI
+        run: |
+          curl -sL "https://packages.cloudfoundry.org/stable?release=linux64-binary&version=v8&source=github" | tar -zx
+          chmod +x cf8
+
+      - name: Authenticate to Prod CF Foundation
+        run: |
+          ./cf8 api "${{ secrets.CF_PROD_API }}"
+          ./cf8 auth "${{ secrets.CF_PROD_USERNAME }}" "${{ secrets.CF_PROD_PASSWORD }}"
+          ./cf8 target -o "${{ secrets.CF_PROD_ORG }}" -s "${{ secrets.CF_PROD_SPACE }}"
+
+      - name: Blue-Green Deploy to Prod
+        id: blue-green
+        env:
+          APP_NAME: ${{ secrets.APP_NAME }}
+          APP_ROUTE: ${{ secrets.APP_ROUTE_PROD }}
+        run: |
+          GREEN_APP="${APP_NAME}-prod-${{ needs.check-release.outputs.version }}"
+          BLUE_APP=""
+
+          # Find current running app (blue) by looking for apps with the production route
+          echo "Looking for existing app with route: ${APP_ROUTE}"
+          EXISTING_APPS=$(./cf8 apps | grep "${APP_NAME}-prod" | awk '{print $1}' || true)
+
+          if [ -n "$EXISTING_APPS" ]; then
+            for app in $EXISTING_APPS; do
+              if [ "$app" != "$GREEN_APP" ]; then
+                APP_ROUTES=$(./cf8 app "$app" | grep "routes:" || true)
+                if echo "$APP_ROUTES" | grep -q "$APP_ROUTE"; then
+                  BLUE_APP="$app"
+                  echo "Found blue app: $BLUE_APP"
+                  break
+                fi
+              fi
+            done
+          fi
+
+          echo "previous_app=${BLUE_APP}" >> "$GITHUB_OUTPUT"
+
+          # Deploy the new version (green)
+          echo "Deploying green app: $GREEN_APP"
+          ./cf8 push "$GREEN_APP" \
+            -f manifest.yml \
+            -p "${{ needs.check-release.outputs.jar_name }}" \
+            --no-route
+
+          # Wait for app to start and verify health
+          echo "Waiting for app to start..."
+          sleep 10
+
+          APP_STATE=$(./cf8 app "$GREEN_APP" | grep "#0" | awk '{print $2}')
+          if [ "$APP_STATE" != "running" ]; then
+            echo "Error: Green app failed to start. State: $APP_STATE"
+            ./cf8 logs "$GREEN_APP" --recent
+            exit 1
+          fi
+
+          echo "Green app is running. Mapping production route..."
+
+          # Map the production route to green
+          ./cf8 map-route "$GREEN_APP" "$APP_ROUTE"
+
+          # If there's a blue app, unmap its route and optionally stop it
+          if [ -n "$BLUE_APP" ]; then
+            echo "Unmapping route from blue app: $BLUE_APP"
+            ./cf8 unmap-route "$BLUE_APP" "$APP_ROUTE" || true
+
+            echo "Stopping blue app: $BLUE_APP"
+            ./cf8 stop "$BLUE_APP" || true
+          fi
+
+          echo "Blue-green deployment to prod complete!"
+
+      - name: Record deployed version
+        run: |
+          echo "${{ needs.check-release.outputs.release_tag }}" > .last-deployed-version
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .last-deployed-version
+          git diff --cached --quiet || git commit -m "Record deployment of ${{ needs.check-release.outputs.release_tag }}"
+          git push
+
+  cleanup-old-apps:
+    needs: [check-release, deploy-nonprod, deploy-prod]
+    if: always() && needs.check-release.outputs.new_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install CF CLI
+        run: |
+          curl -sL "https://packages.cloudfoundry.org/stable?release=linux64-binary&version=v8&source=github" | tar -zx
+          chmod +x cf8
+
+      - name: Cleanup old nonprod apps
+        if: needs.deploy-nonprod.result == 'success' && needs.deploy-nonprod.outputs.previous_app != ''
+        continue-on-error: true
+        run: |
+          ./cf8 api "${{ secrets.CF_NONPROD_API }}"
+          ./cf8 auth "${{ secrets.CF_NONPROD_USERNAME }}" "${{ secrets.CF_NONPROD_PASSWORD }}"
+          ./cf8 target -o "${{ secrets.CF_NONPROD_ORG }}" -s "${{ secrets.CF_NONPROD_SPACE }}"
+
+          PREVIOUS_APP="${{ needs.deploy-nonprod.outputs.previous_app }}"
+          echo "Deleting old nonprod app: $PREVIOUS_APP"
+          ./cf8 delete "$PREVIOUS_APP" -f -r || echo "Failed to delete $PREVIOUS_APP, may need manual cleanup"
+
+      - name: Cleanup old prod apps
+        if: needs.deploy-prod.result == 'success' && needs.deploy-prod.outputs.previous_app != ''
+        continue-on-error: true
+        run: |
+          ./cf8 api "${{ secrets.CF_PROD_API }}"
+          ./cf8 auth "${{ secrets.CF_PROD_USERNAME }}" "${{ secrets.CF_PROD_PASSWORD }}"
+          ./cf8 target -o "${{ secrets.CF_PROD_ORG }}" -s "${{ secrets.CF_PROD_SPACE }}"
+
+          PREVIOUS_APP="${{ needs.deploy-prod.outputs.previous_app }}"
+          echo "Deleting old prod app: $PREVIOUS_APP"
+          ./cf8 delete "$PREVIOUS_APP" -f -r || echo "Failed to delete $PREVIOUS_APP, may need manual cleanup"
