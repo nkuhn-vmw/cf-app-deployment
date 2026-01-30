@@ -1,6 +1,6 @@
-# cf-mcp-client Cloud Foundry Deployment
+# cf-app-deployment
 
-Automated deployment pipeline for [cf-mcp-client](https://github.com/cpage-pivotal/cf-mcp-client) to Cloud Foundry.
+Generic Cloud Foundry deployment pipeline with blue-green deployment support.
 
 ## Workflows
 
@@ -35,7 +35,7 @@ Zero-downtime blue-green deployment supporting **different CF foundations** for 
 
 ### How it works
 
-1. A scheduled GitHub Action polls `cpage-pivotal/cf-mcp-client` for new releases every 6 hours.
+1. A scheduled GitHub Action polls the upstream repository for new releases every 6 hours.
 2. When a new release is detected, the app is **automatically deployed to Dev**.
 3. After Dev succeeds, the **Prod deployment waits for manual approval** via the `production` GitHub Environment.
 4. Once approved, the workflow deploys to Prod and records the deployed version.
@@ -48,6 +48,8 @@ Configure these in **Settings > Secrets and variables > Actions**:
 
 | Secret | Description |
 |--------|-------------|
+| `APP_UPSTREAM_REPO` | GitHub repo to watch for releases (e.g. `owner/repo-name`) |
+| `APP_NAME` | Base application name (e.g. `my-app`) |
 | `CF_API` | Cloud Foundry API endpoint (e.g. `https://api.sys.example.com`) |
 | `CF_USERNAME` | Cloud Foundry username |
 | `CF_PASSWORD` | Cloud Foundry password |

@@ -1,4 +1,4 @@
-name: Deploy cf-mcp-client to Cloud Foundry
+name: Deploy to Cloud Foundry
 
 on:
   schedule:
@@ -12,9 +12,6 @@ on:
 
 permissions:
   contents: write
-
-env:
-  UPSTREAM_REPO: cpage-pivotal/cf-mcp-client
 
 jobs:
   check-release:
@@ -31,11 +28,18 @@ jobs:
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_REPO: ${{ secrets.APP_UPSTREAM_REPO }}
+          APP_NAME: ${{ secrets.APP_NAME }}
         run: |
+          if [ -z "$UPSTREAM_REPO" ]; then
+            echo "Error: APP_UPSTREAM_REPO secret is not set"
+            exit 1
+          fi
+
           if [ -n "${{ inputs.release_tag }}" ]; then
             RELEASE_TAG="${{ inputs.release_tag }}"
           else
-            RELEASE_TAG=$(gh api repos/${{ env.UPSTREAM_REPO }}/releases/latest --jq '.tag_name')
+            RELEASE_TAG=$(gh api repos/${UPSTREAM_REPO}/releases/latest --jq '.tag_name')
           fi
 
           echo "Target release: $RELEASE_TAG"
@@ -65,7 +69,7 @@ jobs:
 
             VERSION=${RELEASE_TAG#v}
             APP_VERSION=${VERSION//./-}
-            echo "jar_name=cf-mcp-client-${VERSION}.jar" >> "$GITHUB_OUTPUT"
+            echo "jar_name=${APP_NAME}-${VERSION}.jar" >> "$GITHUB_OUTPUT"
             echo "version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
           fi
 
@@ -73,9 +77,10 @@ jobs:
         if: steps.check.outputs.new_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_REPO: ${{ secrets.APP_UPSTREAM_REPO }}
         run: |
           gh release download "${{ steps.check.outputs.release_tag }}" \
-            --repo ${{ env.UPSTREAM_REPO }} \
+            --repo ${UPSTREAM_REPO} \
             --pattern "${{ steps.check.outputs.jar_name }}" \
             --pattern "manifest.yml" \
             --dir ./artifacts
@@ -99,12 +104,14 @@ jobs:
           name: release-assets
 
       - name: Deploy to Dev
+        env:
+          APP_NAME: ${{ secrets.APP_NAME }}
         run: |
           curl -sL "https://packages.cloudfoundry.org/stable?release=linux64-binary&version=v8&source=github" | tar -zx
           ./cf8 api "${{ secrets.CF_API }}"
           ./cf8 auth "${{ secrets.CF_USERNAME }}" "${{ secrets.CF_PASSWORD }}"
           ./cf8 target -o "${{ secrets.CF_ORG }}" -s "${{ secrets.CF_DEV_SPACE }}"
-          ./cf8 push "cf-mcp-client-dev-${{ needs.check-release.outputs.version }}" \
+          ./cf8 push "${APP_NAME}-dev-${{ needs.check-release.outputs.version }}" \
             -f manifest.yml \
             -p "${{ needs.check-release.outputs.jar_name }}"
 
@@ -122,12 +129,14 @@ jobs:
           name: release-assets
 
       - name: Deploy to Prod
+        env:
+          APP_NAME: ${{ secrets.APP_NAME }}
         run: |
           curl -sL "https://packages.cloudfoundry.org/stable?release=linux64-binary&version=v8&source=github" | tar -zx
           ./cf8 api "${{ secrets.CF_API }}"
           ./cf8 auth "${{ secrets.CF_USERNAME }}" "${{ secrets.CF_PASSWORD }}"
           ./cf8 target -o "${{ secrets.CF_ORG }}" -s "${{ secrets.CF_PROD_SPACE }}"
-          ./cf8 push "cf-mcp-client-prod-${{ needs.check-release.outputs.version }}" \
+          ./cf8 push "${APP_NAME}-prod-${{ needs.check-release.outputs.version }}" \
             -f manifest.yml \
             -p "${{ needs.check-release.outputs.jar_name }}"
 
