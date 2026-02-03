@@ -19,8 +19,8 @@ jobs:
     outputs:
       new_release: ${{ steps.check.outputs.new_release }}
       release_tag: ${{ steps.check.outputs.release_tag }}
-      jar_name: ${{ steps.check.outputs.jar_name }}
       version: ${{ steps.check.outputs.version }}
+      version_dotted: ${{ steps.check.outputs.version_dotted }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,8 +69,8 @@ jobs:
 
             VERSION=${RELEASE_TAG#v}
             APP_VERSION=${VERSION//./-}
-            echo "jar_name=${APP_NAME}-${VERSION}.jar" >> "$GITHUB_OUTPUT"
             echo "version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "version_dotted=${VERSION}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Download release assets
@@ -78,10 +78,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPSTREAM_REPO: ${{ secrets.APP_UPSTREAM_REPO }}
+          APP_NAME: ${{ secrets.APP_NAME }}
         run: |
           gh release download "${{ steps.check.outputs.release_tag }}" \
             --repo ${UPSTREAM_REPO} \
-            --pattern "${{ steps.check.outputs.jar_name }}" \
+            --pattern "${APP_NAME}-${{ steps.check.outputs.version_dotted }}.jar" \
             --pattern "manifest.yml" \
             --dir ./artifacts
 
@@ -106,6 +107,7 @@ jobs:
       - name: Deploy to Dev
         env:
           APP_NAME: ${{ secrets.APP_NAME }}
+          VERSION_DOTTED: ${{ needs.check-release.outputs.version_dotted }}
         run: |
           curl -sL "https://packages.cloudfoundry.org/stable?release=linux64-binary&version=v8&source=github" | tar -zx
           ./cf8 api "${{ secrets.CF_API }}"
@@ -113,7 +115,7 @@ jobs:
           ./cf8 target -o "${{ secrets.CF_ORG }}" -s "${{ secrets.CF_DEV_SPACE }}"
           ./cf8 push "${APP_NAME}-dev-${{ needs.check-release.outputs.version }}" \
             -f manifest.yml \
-            -p "${{ needs.check-release.outputs.jar_name }}"
+            -p "${APP_NAME}-${VERSION_DOTTED}.jar"
 
   deploy-prod:
     needs: [check-release, deploy-dev]
@@ -131,6 +133,7 @@ jobs:
       - name: Deploy to Prod
         env:
           APP_NAME: ${{ secrets.APP_NAME }}
+          VERSION_DOTTED: ${{ needs.check-release.outputs.version_dotted }}
         run: |
           curl -sL "https://packages.cloudfoundry.org/stable?release=linux64-binary&version=v8&source=github" | tar -zx
           ./cf8 api "${{ secrets.CF_API }}"
@@ -138,7 +141,7 @@ jobs:
           ./cf8 target -o "${{ secrets.CF_ORG }}" -s "${{ secrets.CF_PROD_SPACE }}"
           ./cf8 push "${APP_NAME}-prod-${{ needs.check-release.outputs.version }}" \
             -f manifest.yml \
-            -p "${{ needs.check-release.outputs.jar_name }}"
+            -p "${APP_NAME}-${VERSION_DOTTED}.jar"
 
       - name: Record deployed version
         run: |

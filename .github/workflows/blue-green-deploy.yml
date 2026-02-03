@@ -24,8 +24,8 @@ jobs:
     outputs:
       new_release: ${{ steps.check.outputs.new_release }}
       release_tag: ${{ steps.check.outputs.release_tag }}
-      jar_name: ${{ steps.check.outputs.jar_name }}
       version: ${{ steps.check.outputs.version }}
+      version_dotted: ${{ steps.check.outputs.version_dotted }}
     steps:
       - uses: actions/checkout@v4
 
@@ -73,8 +73,8 @@ jobs:
 
             VERSION=${RELEASE_TAG#v}
             APP_VERSION=${VERSION//./-}
-            echo "jar_name=${{ secrets.APP_NAME }}-${VERSION}.jar" >> "$GITHUB_OUTPUT"
             echo "version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "version_dotted=${VERSION}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Download release assets
@@ -82,10 +82,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPSTREAM_REPO: ${{ secrets.APP_UPSTREAM_REPO }}
+          APP_NAME: ${{ secrets.APP_NAME }}
         run: |
           gh release download "${{ steps.check.outputs.release_tag }}" \
             --repo ${UPSTREAM_REPO} \
-            --pattern "${{ steps.check.outputs.jar_name }}" \
+            --pattern "${APP_NAME}-${{ steps.check.outputs.version_dotted }}.jar" \
             --pattern "manifest.yml" \
             --dir ./artifacts
 
@@ -125,6 +126,7 @@ jobs:
         env:
           APP_NAME: ${{ secrets.APP_NAME }}
           APP_ROUTE: ${{ secrets.APP_ROUTE_NONPROD }}
+          VERSION_DOTTED: ${{ needs.check-release.outputs.version_dotted }}
         run: |
           GREEN_APP="${APP_NAME}-nonprod-${{ needs.check-release.outputs.version }}"
           BLUE_APP=""
@@ -152,7 +154,7 @@ jobs:
           echo "Deploying green app: $GREEN_APP"
           ./cf8 push "$GREEN_APP" \
             -f manifest.yml \
-            -p "${{ needs.check-release.outputs.jar_name }}" \
+            -p "${APP_NAME}-${VERSION_DOTTED}.jar" \
             --no-route
 
           # Wait for app to start and verify health
@@ -216,6 +218,7 @@ jobs:
         env:
           APP_NAME: ${{ secrets.APP_NAME }}
           APP_ROUTE: ${{ secrets.APP_ROUTE_PROD }}
+          VERSION_DOTTED: ${{ needs.check-release.outputs.version_dotted }}
         run: |
           GREEN_APP="${APP_NAME}-prod-${{ needs.check-release.outputs.version }}"
           BLUE_APP=""
@@ -243,7 +246,7 @@ jobs:
           echo "Deploying green app: $GREEN_APP"
           ./cf8 push "$GREEN_APP" \
             -f manifest.yml \
-            -p "${{ needs.check-release.outputs.jar_name }}" \
+            -p "${APP_NAME}-${VERSION_DOTTED}.jar" \
             --no-route
 
           # Wait for app to start and verify health
