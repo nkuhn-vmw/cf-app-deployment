@@ -75,7 +75,7 @@ prompt_secret() {
     echo -e "  ${DIM}Example: $example${NC}"
     read -p "  > " value
     echo ""
-    echo "$value"
+    eval "$name=\"\$value\""
 }
 
 # Prompt for a password (hidden input)
@@ -88,7 +88,7 @@ prompt_password() {
     read -sp "  > " value
     echo ""
     echo ""
-    echo "$value"
+    eval "$name=\"\$value\""
 }
 
 # Set a GitHub secret
@@ -103,6 +103,20 @@ set_secret() {
 
     echo "$value" | gh secret set "$name" 2>/dev/null
     print_success "$name"
+}
+
+# Show a value for confirmation (mask passwords)
+show_value() {
+    local name="$1"
+    local value="$2"
+
+    if [[ "$name" == *"PASSWORD"* ]]; then
+        echo -e "  ${BOLD}$name${NC}: ${DIM}(hidden)${NC}"
+    elif [ -z "$value" ]; then
+        echo -e "  ${BOLD}$name${NC}: ${YELLOW}(empty - will be skipped)${NC}"
+    else
+        echo -e "  ${BOLD}$name${NC}: $value"
+    fi
 }
 
 # Show what secrets are needed for standard deployment
@@ -166,27 +180,37 @@ show_blue_green_requirements() {
     read -p "Press Enter when ready to continue (or Ctrl+C to cancel)..."
 }
 
-# Display collected values for confirmation
-confirm_values() {
-    local workflow="$1"
-    shift
-    local -n secrets_ref=$1
+# Setup secrets for standard deployment
+setup_standard_deploy() {
+    show_standard_requirements
 
+    print_header "Enter Secret Values"
+
+    print_subheader "Application Configuration"
+    prompt_secret "APP_UPSTREAM_REPO" "owner/repo-name"
+    prompt_secret "APP_NAME" "my-app"
+
+    print_subheader "Cloud Foundry Credentials"
+    prompt_secret "CF_API" "https://api.sys.example.com"
+    prompt_secret "CF_USERNAME" "cf-deployer"
+    prompt_password "CF_PASSWORD"
+    prompt_secret "CF_ORG" "my-org"
+    prompt_secret "CF_DEV_SPACE" "development"
+    prompt_secret "CF_PROD_SPACE" "production"
+
+    # Confirmation
     print_header "Review Your Configuration"
 
     echo "Please verify these values before setting the secrets:"
     echo ""
-
-    for key in "${!secrets_ref[@]}"; do
-        value="${secrets_ref[$key]}"
-        if [[ "$key" == *"PASSWORD"* ]]; then
-            echo -e "  ${BOLD}$key${NC}: ${DIM}(hidden)${NC}"
-        elif [ -z "$value" ]; then
-            echo -e "  ${BOLD}$key${NC}: ${YELLOW}(empty - will be skipped)${NC}"
-        else
-            echo -e "  ${BOLD}$key${NC}: $value"
-        fi
-    done
+    show_value "APP_UPSTREAM_REPO" "$APP_UPSTREAM_REPO"
+    show_value "APP_NAME" "$APP_NAME"
+    show_value "CF_API" "$CF_API"
+    show_value "CF_USERNAME" "$CF_USERNAME"
+    show_value "CF_PASSWORD" "$CF_PASSWORD"
+    show_value "CF_ORG" "$CF_ORG"
+    show_value "CF_DEV_SPACE" "$CF_DEV_SPACE"
+    show_value "CF_PROD_SPACE" "$CF_PROD_SPACE"
 
     echo ""
     read -p "Set these secrets? [y/N]: " confirm
@@ -195,38 +219,18 @@ confirm_values() {
         print_warning "Cancelled. No secrets were set."
         exit 0
     fi
-}
-
-# Setup secrets for standard deployment
-setup_standard_deploy() {
-    show_standard_requirements
-
-    print_header "Enter Secret Values"
-
-    declare -A secrets
-
-    print_subheader "Application Configuration"
-    secrets[APP_UPSTREAM_REPO]=$(prompt_secret "APP_UPSTREAM_REPO" "owner/repo-name")
-    secrets[APP_NAME]=$(prompt_secret "APP_NAME" "my-app")
-
-    print_subheader "Cloud Foundry Credentials"
-    secrets[CF_API]=$(prompt_secret "CF_API" "https://api.sys.example.com")
-    secrets[CF_USERNAME]=$(prompt_secret "CF_USERNAME" "cf-deployer")
-    secrets[CF_PASSWORD]=$(prompt_password "CF_PASSWORD")
-    secrets[CF_ORG]=$(prompt_secret "CF_ORG" "my-org")
-    secrets[CF_DEV_SPACE]=$(prompt_secret "CF_DEV_SPACE" "development")
-    secrets[CF_PROD_SPACE]=$(prompt_secret "CF_PROD_SPACE" "production")
-
-    confirm_values "standard" secrets
 
     print_header "Setting GitHub Secrets"
 
     local success_count=0
-    for key in APP_UPSTREAM_REPO APP_NAME CF_API CF_USERNAME CF_PASSWORD CF_ORG CF_DEV_SPACE CF_PROD_SPACE; do
-        if set_secret "$key" "${secrets[$key]}"; then
-            ((success_count++))
-        fi
-    done
+    set_secret "APP_UPSTREAM_REPO" "$APP_UPSTREAM_REPO" && ((success_count++)) || true
+    set_secret "APP_NAME" "$APP_NAME" && ((success_count++)) || true
+    set_secret "CF_API" "$CF_API" && ((success_count++)) || true
+    set_secret "CF_USERNAME" "$CF_USERNAME" && ((success_count++)) || true
+    set_secret "CF_PASSWORD" "$CF_PASSWORD" && ((success_count++)) || true
+    set_secret "CF_ORG" "$CF_ORG" && ((success_count++)) || true
+    set_secret "CF_DEV_SPACE" "$CF_DEV_SPACE" && ((success_count++)) || true
+    set_secret "CF_PROD_SPACE" "$CF_PROD_SPACE" && ((success_count++)) || true
 
     echo ""
     print_success "Standard deployment configured! ($success_count secrets set)"
@@ -238,40 +242,73 @@ setup_blue_green_deploy() {
 
     print_header "Enter Secret Values"
 
-    declare -A secrets
-
     print_subheader "Application Configuration"
-    secrets[APP_UPSTREAM_REPO]=$(prompt_secret "APP_UPSTREAM_REPO" "owner/repo-name")
-    secrets[APP_NAME]=$(prompt_secret "APP_NAME" "my-app")
-    secrets[APP_ROUTE_NONPROD]=$(prompt_secret "APP_ROUTE_NONPROD" "my-app.apps.nonprod.example.com")
-    secrets[APP_ROUTE_PROD]=$(prompt_secret "APP_ROUTE_PROD" "my-app.apps.prod.example.com")
+    prompt_secret "APP_UPSTREAM_REPO" "owner/repo-name"
+    prompt_secret "APP_NAME" "my-app"
+    prompt_secret "APP_ROUTE_NONPROD" "my-app.apps.nonprod.example.com"
+    prompt_secret "APP_ROUTE_PROD" "my-app.apps.prod.example.com"
 
     print_subheader "Nonprod CF Foundation"
-    secrets[CF_NONPROD_API]=$(prompt_secret "CF_NONPROD_API" "https://api.sys.nonprod.example.com")
-    secrets[CF_NONPROD_USERNAME]=$(prompt_secret "CF_NONPROD_USERNAME" "cf-deployer")
-    secrets[CF_NONPROD_PASSWORD]=$(prompt_password "CF_NONPROD_PASSWORD")
-    secrets[CF_NONPROD_ORG]=$(prompt_secret "CF_NONPROD_ORG" "my-org")
-    secrets[CF_NONPROD_SPACE]=$(prompt_secret "CF_NONPROD_SPACE" "nonprod")
+    prompt_secret "CF_NONPROD_API" "https://api.sys.nonprod.example.com"
+    prompt_secret "CF_NONPROD_USERNAME" "cf-deployer"
+    prompt_password "CF_NONPROD_PASSWORD"
+    prompt_secret "CF_NONPROD_ORG" "my-org"
+    prompt_secret "CF_NONPROD_SPACE" "nonprod"
 
     print_subheader "Prod CF Foundation"
-    secrets[CF_PROD_API]=$(prompt_secret "CF_PROD_API" "https://api.sys.prod.example.com")
-    secrets[CF_PROD_USERNAME]=$(prompt_secret "CF_PROD_USERNAME" "cf-deployer")
-    secrets[CF_PROD_PASSWORD]=$(prompt_password "CF_PROD_PASSWORD")
-    secrets[CF_PROD_ORG]=$(prompt_secret "CF_PROD_ORG" "my-org")
-    secrets[CF_PROD_SPACE]=$(prompt_secret "CF_PROD_SPACE" "prod")
+    prompt_secret "CF_PROD_API" "https://api.sys.prod.example.com"
+    prompt_secret "CF_PROD_USERNAME" "cf-deployer"
+    prompt_password "CF_PROD_PASSWORD"
+    prompt_secret "CF_PROD_ORG" "my-org"
+    prompt_secret "CF_PROD_SPACE" "prod"
 
-    confirm_values "blue-green" secrets
+    # Confirmation
+    print_header "Review Your Configuration"
+
+    echo "Please verify these values before setting the secrets:"
+    echo ""
+    show_value "APP_UPSTREAM_REPO" "$APP_UPSTREAM_REPO"
+    show_value "APP_NAME" "$APP_NAME"
+    show_value "APP_ROUTE_NONPROD" "$APP_ROUTE_NONPROD"
+    show_value "APP_ROUTE_PROD" "$APP_ROUTE_PROD"
+    echo ""
+    show_value "CF_NONPROD_API" "$CF_NONPROD_API"
+    show_value "CF_NONPROD_USERNAME" "$CF_NONPROD_USERNAME"
+    show_value "CF_NONPROD_PASSWORD" "$CF_NONPROD_PASSWORD"
+    show_value "CF_NONPROD_ORG" "$CF_NONPROD_ORG"
+    show_value "CF_NONPROD_SPACE" "$CF_NONPROD_SPACE"
+    echo ""
+    show_value "CF_PROD_API" "$CF_PROD_API"
+    show_value "CF_PROD_USERNAME" "$CF_PROD_USERNAME"
+    show_value "CF_PROD_PASSWORD" "$CF_PROD_PASSWORD"
+    show_value "CF_PROD_ORG" "$CF_PROD_ORG"
+    show_value "CF_PROD_SPACE" "$CF_PROD_SPACE"
+
+    echo ""
+    read -p "Set these secrets? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo ""
+        print_warning "Cancelled. No secrets were set."
+        exit 0
+    fi
 
     print_header "Setting GitHub Secrets"
 
     local success_count=0
-    for key in APP_UPSTREAM_REPO APP_NAME APP_ROUTE_NONPROD APP_ROUTE_PROD \
-               CF_NONPROD_API CF_NONPROD_USERNAME CF_NONPROD_PASSWORD CF_NONPROD_ORG CF_NONPROD_SPACE \
-               CF_PROD_API CF_PROD_USERNAME CF_PROD_PASSWORD CF_PROD_ORG CF_PROD_SPACE; do
-        if set_secret "$key" "${secrets[$key]}"; then
-            ((success_count++))
-        fi
-    done
+    set_secret "APP_UPSTREAM_REPO" "$APP_UPSTREAM_REPO" && ((success_count++)) || true
+    set_secret "APP_NAME" "$APP_NAME" && ((success_count++)) || true
+    set_secret "APP_ROUTE_NONPROD" "$APP_ROUTE_NONPROD" && ((success_count++)) || true
+    set_secret "APP_ROUTE_PROD" "$APP_ROUTE_PROD" && ((success_count++)) || true
+    set_secret "CF_NONPROD_API" "$CF_NONPROD_API" && ((success_count++)) || true
+    set_secret "CF_NONPROD_USERNAME" "$CF_NONPROD_USERNAME" && ((success_count++)) || true
+    set_secret "CF_NONPROD_PASSWORD" "$CF_NONPROD_PASSWORD" && ((success_count++)) || true
+    set_secret "CF_NONPROD_ORG" "$CF_NONPROD_ORG" && ((success_count++)) || true
+    set_secret "CF_NONPROD_SPACE" "$CF_NONPROD_SPACE" && ((success_count++)) || true
+    set_secret "CF_PROD_API" "$CF_PROD_API" && ((success_count++)) || true
+    set_secret "CF_PROD_USERNAME" "$CF_PROD_USERNAME" && ((success_count++)) || true
+    set_secret "CF_PROD_PASSWORD" "$CF_PROD_PASSWORD" && ((success_count++)) || true
+    set_secret "CF_PROD_ORG" "$CF_PROD_ORG" && ((success_count++)) || true
+    set_secret "CF_PROD_SPACE" "$CF_PROD_SPACE" && ((success_count++)) || true
 
     echo ""
     print_success "Blue-green deployment configured! ($success_count secrets set)"
