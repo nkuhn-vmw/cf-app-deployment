@@ -11,69 +11,83 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m' # No Color
 
 print_header() {
-    echo -e "\n${BLUE}========================================${NC}"
-    echo -e "${BLUE}$1${NC}"
-    echo -e "${BLUE}========================================${NC}\n"
+    echo ""
+    echo -e "${BLUE}┌──────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "${BLUE}│${NC} ${BOLD}$1${NC}"
+    echo -e "${BLUE}└──────────────────────────────────────────────────────────────┘${NC}"
+    echo ""
+}
+
+print_subheader() {
+    echo ""
+    echo -e "${CYAN}── $1 ──${NC}"
+    echo ""
 }
 
 print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
+    echo -e "  ${GREEN}✓${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}! $1${NC}"
+    echo -e "  ${YELLOW}!${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}✗ $1${NC}"
+    echo -e "  ${RED}✗${NC} $1"
+}
+
+print_bullet() {
+    echo -e "  ${DIM}•${NC} $1"
 }
 
 # Check if gh CLI is installed and authenticated
 check_gh_cli() {
     if ! command -v gh &> /dev/null; then
         print_error "GitHub CLI (gh) is not installed."
-        echo "Install it from: https://cli.github.com/"
+        echo "    Install it from: https://cli.github.com/"
         exit 1
     fi
 
     if ! gh auth status &> /dev/null; then
         print_error "GitHub CLI is not authenticated."
-        echo "Run: gh auth login"
+        echo "    Run: gh auth login"
         exit 1
     fi
 
+    REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "unknown")
     print_success "GitHub CLI authenticated"
+    print_success "Target repository: ${BOLD}$REPO${NC}"
 }
 
-# Prompt for a secret value
+# Prompt for a secret value with better formatting
 prompt_secret() {
     local name="$1"
-    local description="$2"
-    local default="$3"
+    local example="$2"
     local value
 
-    echo -e "${YELLOW}$name${NC}: $description"
-    if [ -n "$default" ]; then
-        read -p "  Value [$default]: " value
-        value="${value:-$default}"
-    else
-        read -p "  Value: " value
-    fi
+    echo -e "  ${BOLD}$name${NC}"
+    echo -e "  ${DIM}Example: $example${NC}"
+    read -p "  > " value
+    echo ""
     echo "$value"
 }
 
 # Prompt for a password (hidden input)
 prompt_password() {
     local name="$1"
-    local description="$2"
     local value
 
-    echo -e "${YELLOW}$name${NC}: $description"
-    read -sp "  Value: " value
-    echo
+    echo -e "  ${BOLD}$name${NC}"
+    echo -e "  ${DIM}(input hidden)${NC}"
+    read -sp "  > " value
+    echo ""
+    echo ""
     echo "$value"
 }
 
@@ -84,120 +98,207 @@ set_secret() {
 
     if [ -z "$value" ]; then
         print_warning "Skipping $name (empty value)"
-        return
+        return 1
     fi
 
-    echo "$value" | gh secret set "$name"
-    print_success "Set secret: $name"
+    echo "$value" | gh secret set "$name" 2>/dev/null
+    print_success "$name"
+}
+
+# Show what secrets are needed for standard deployment
+show_standard_requirements() {
+    print_header "Standard Deployment - Required Secrets"
+
+    echo "This workflow deploys to Dev and Prod spaces within the SAME CF foundation."
+    echo ""
+    echo -e "${BOLD}Before you begin, gather the following information:${NC}"
+    echo ""
+    echo -e "${CYAN}Application Configuration:${NC}"
+    print_bullet "APP_UPSTREAM_REPO  - GitHub repo to watch for releases"
+    print_bullet "APP_NAME           - Your application's base name"
+    echo ""
+    echo -e "${CYAN}Cloud Foundry Credentials (single foundation):${NC}"
+    print_bullet "CF_API             - API endpoint URL"
+    print_bullet "CF_USERNAME        - Service account username"
+    print_bullet "CF_PASSWORD        - Service account password"
+    print_bullet "CF_ORG             - Organization name"
+    print_bullet "CF_DEV_SPACE       - Development space name"
+    print_bullet "CF_PROD_SPACE      - Production space name"
+    echo ""
+    echo -e "${DIM}Total: 8 secrets to configure${NC}"
+    echo ""
+
+    read -p "Press Enter when ready to continue (or Ctrl+C to cancel)..."
+}
+
+# Show what secrets are needed for blue-green deployment
+show_blue_green_requirements() {
+    print_header "Blue-Green Deployment - Required Secrets"
+
+    echo "This workflow supports DIFFERENT CF foundations for nonprod and prod,"
+    echo "with zero-downtime blue-green deployments."
+    echo ""
+    echo -e "${BOLD}Before you begin, gather the following information:${NC}"
+    echo ""
+    echo -e "${CYAN}Application Configuration:${NC}"
+    print_bullet "APP_UPSTREAM_REPO  - GitHub repo to watch for releases"
+    print_bullet "APP_NAME           - Your application's base name"
+    print_bullet "APP_ROUTE_NONPROD  - Route domain for nonprod"
+    print_bullet "APP_ROUTE_PROD     - Route domain for prod"
+    echo ""
+    echo -e "${CYAN}Nonprod CF Foundation:${NC}"
+    print_bullet "CF_NONPROD_API      - Nonprod API endpoint"
+    print_bullet "CF_NONPROD_USERNAME - Nonprod service account"
+    print_bullet "CF_NONPROD_PASSWORD - Nonprod password"
+    print_bullet "CF_NONPROD_ORG      - Nonprod organization"
+    print_bullet "CF_NONPROD_SPACE    - Nonprod space"
+    echo ""
+    echo -e "${CYAN}Prod CF Foundation:${NC}"
+    print_bullet "CF_PROD_API         - Prod API endpoint"
+    print_bullet "CF_PROD_USERNAME    - Prod service account"
+    print_bullet "CF_PROD_PASSWORD    - Prod password"
+    print_bullet "CF_PROD_ORG         - Prod organization"
+    print_bullet "CF_PROD_SPACE       - Prod space"
+    echo ""
+    echo -e "${DIM}Total: 14 secrets to configure${NC}"
+    echo ""
+
+    read -p "Press Enter when ready to continue (or Ctrl+C to cancel)..."
+}
+
+# Display collected values for confirmation
+confirm_values() {
+    local workflow="$1"
+    shift
+    local -n secrets_ref=$1
+
+    print_header "Review Your Configuration"
+
+    echo "Please verify these values before setting the secrets:"
+    echo ""
+
+    for key in "${!secrets_ref[@]}"; do
+        value="${secrets_ref[$key]}"
+        if [[ "$key" == *"PASSWORD"* ]]; then
+            echo -e "  ${BOLD}$key${NC}: ${DIM}(hidden)${NC}"
+        elif [ -z "$value" ]; then
+            echo -e "  ${BOLD}$key${NC}: ${YELLOW}(empty - will be skipped)${NC}"
+        else
+            echo -e "  ${BOLD}$key${NC}: $value"
+        fi
+    done
+
+    echo ""
+    read -p "Set these secrets? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo ""
+        print_warning "Cancelled. No secrets were set."
+        exit 0
+    fi
 }
 
 # Setup secrets for standard deployment
 setup_standard_deploy() {
-    print_header "Standard Deployment Secrets (deploy.yml)"
+    show_standard_requirements
 
-    echo "This workflow deploys to Dev and Prod spaces within the SAME CF foundation."
+    print_header "Enter Secret Values"
+
+    declare -A secrets
+
+    print_subheader "Application Configuration"
+    secrets[APP_UPSTREAM_REPO]=$(prompt_secret "APP_UPSTREAM_REPO" "owner/repo-name")
+    secrets[APP_NAME]=$(prompt_secret "APP_NAME" "my-app")
+
+    print_subheader "Cloud Foundry Credentials"
+    secrets[CF_API]=$(prompt_secret "CF_API" "https://api.sys.example.com")
+    secrets[CF_USERNAME]=$(prompt_secret "CF_USERNAME" "cf-deployer")
+    secrets[CF_PASSWORD]=$(prompt_password "CF_PASSWORD")
+    secrets[CF_ORG]=$(prompt_secret "CF_ORG" "my-org")
+    secrets[CF_DEV_SPACE]=$(prompt_secret "CF_DEV_SPACE" "development")
+    secrets[CF_PROD_SPACE]=$(prompt_secret "CF_PROD_SPACE" "production")
+
+    confirm_values "standard" secrets
+
+    print_header "Setting GitHub Secrets"
+
+    local success_count=0
+    for key in APP_UPSTREAM_REPO APP_NAME CF_API CF_USERNAME CF_PASSWORD CF_ORG CF_DEV_SPACE CF_PROD_SPACE; do
+        if set_secret "$key" "${secrets[$key]}"; then
+            ((success_count++))
+        fi
+    done
+
     echo ""
-
-    # Application config
-    echo -e "\n${GREEN}--- Application Configuration ---${NC}\n"
-    APP_UPSTREAM_REPO=$(prompt_secret "APP_UPSTREAM_REPO" "GitHub repo to watch (e.g., owner/repo-name)")
-    APP_NAME=$(prompt_secret "APP_NAME" "Base application name (e.g., my-app)")
-
-    # CF credentials (single foundation)
-    echo -e "\n${GREEN}--- Cloud Foundry Configuration ---${NC}\n"
-    CF_API=$(prompt_secret "CF_API" "CF API endpoint (e.g., https://api.sys.example.com)")
-    CF_USERNAME=$(prompt_secret "CF_USERNAME" "CF username")
-    CF_PASSWORD=$(prompt_password "CF_PASSWORD" "CF password")
-    CF_ORG=$(prompt_secret "CF_ORG" "CF organization")
-    CF_DEV_SPACE=$(prompt_secret "CF_DEV_SPACE" "CF dev space")
-    CF_PROD_SPACE=$(prompt_secret "CF_PROD_SPACE" "CF production space")
-
-    # Confirm and set
-    echo ""
-    print_header "Setting Secrets"
-
-    set_secret "APP_UPSTREAM_REPO" "$APP_UPSTREAM_REPO"
-    set_secret "APP_NAME" "$APP_NAME"
-    set_secret "CF_API" "$CF_API"
-    set_secret "CF_USERNAME" "$CF_USERNAME"
-    set_secret "CF_PASSWORD" "$CF_PASSWORD"
-    set_secret "CF_ORG" "$CF_ORG"
-    set_secret "CF_DEV_SPACE" "$CF_DEV_SPACE"
-    set_secret "CF_PROD_SPACE" "$CF_PROD_SPACE"
-
-    print_success "Standard deployment secrets configured!"
+    print_success "Standard deployment configured! ($success_count secrets set)"
 }
 
 # Setup secrets for blue-green deployment
 setup_blue_green_deploy() {
-    print_header "Blue-Green Deployment Secrets (blue-green-deploy.yml)"
+    show_blue_green_requirements
 
-    echo "This workflow supports DIFFERENT CF foundations for nonprod and prod."
+    print_header "Enter Secret Values"
+
+    declare -A secrets
+
+    print_subheader "Application Configuration"
+    secrets[APP_UPSTREAM_REPO]=$(prompt_secret "APP_UPSTREAM_REPO" "owner/repo-name")
+    secrets[APP_NAME]=$(prompt_secret "APP_NAME" "my-app")
+    secrets[APP_ROUTE_NONPROD]=$(prompt_secret "APP_ROUTE_NONPROD" "my-app.apps.nonprod.example.com")
+    secrets[APP_ROUTE_PROD]=$(prompt_secret "APP_ROUTE_PROD" "my-app.apps.prod.example.com")
+
+    print_subheader "Nonprod CF Foundation"
+    secrets[CF_NONPROD_API]=$(prompt_secret "CF_NONPROD_API" "https://api.sys.nonprod.example.com")
+    secrets[CF_NONPROD_USERNAME]=$(prompt_secret "CF_NONPROD_USERNAME" "cf-deployer")
+    secrets[CF_NONPROD_PASSWORD]=$(prompt_password "CF_NONPROD_PASSWORD")
+    secrets[CF_NONPROD_ORG]=$(prompt_secret "CF_NONPROD_ORG" "my-org")
+    secrets[CF_NONPROD_SPACE]=$(prompt_secret "CF_NONPROD_SPACE" "nonprod")
+
+    print_subheader "Prod CF Foundation"
+    secrets[CF_PROD_API]=$(prompt_secret "CF_PROD_API" "https://api.sys.prod.example.com")
+    secrets[CF_PROD_USERNAME]=$(prompt_secret "CF_PROD_USERNAME" "cf-deployer")
+    secrets[CF_PROD_PASSWORD]=$(prompt_password "CF_PROD_PASSWORD")
+    secrets[CF_PROD_ORG]=$(prompt_secret "CF_PROD_ORG" "my-org")
+    secrets[CF_PROD_SPACE]=$(prompt_secret "CF_PROD_SPACE" "prod")
+
+    confirm_values "blue-green" secrets
+
+    print_header "Setting GitHub Secrets"
+
+    local success_count=0
+    for key in APP_UPSTREAM_REPO APP_NAME APP_ROUTE_NONPROD APP_ROUTE_PROD \
+               CF_NONPROD_API CF_NONPROD_USERNAME CF_NONPROD_PASSWORD CF_NONPROD_ORG CF_NONPROD_SPACE \
+               CF_PROD_API CF_PROD_USERNAME CF_PROD_PASSWORD CF_PROD_ORG CF_PROD_SPACE; do
+        if set_secret "$key" "${secrets[$key]}"; then
+            ((success_count++))
+        fi
+    done
+
     echo ""
-
-    # Application config
-    echo -e "\n${GREEN}--- Application Configuration ---${NC}\n"
-    APP_UPSTREAM_REPO=$(prompt_secret "APP_UPSTREAM_REPO" "GitHub repo to watch (e.g., owner/repo-name)")
-    APP_NAME=$(prompt_secret "APP_NAME" "Base application name (e.g., my-app)")
-    APP_ROUTE_NONPROD=$(prompt_secret "APP_ROUTE_NONPROD" "Nonprod route domain (e.g., my-app.apps.nonprod.example.com)")
-    APP_ROUTE_PROD=$(prompt_secret "APP_ROUTE_PROD" "Prod route domain (e.g., my-app.apps.prod.example.com)")
-
-    # Nonprod CF foundation
-    echo -e "\n${GREEN}--- Nonprod CF Foundation ---${NC}\n"
-    CF_NONPROD_API=$(prompt_secret "CF_NONPROD_API" "Nonprod CF API (e.g., https://api.sys.nonprod.example.com)")
-    CF_NONPROD_USERNAME=$(prompt_secret "CF_NONPROD_USERNAME" "Nonprod CF username")
-    CF_NONPROD_PASSWORD=$(prompt_password "CF_NONPROD_PASSWORD" "Nonprod CF password")
-    CF_NONPROD_ORG=$(prompt_secret "CF_NONPROD_ORG" "Nonprod CF organization")
-    CF_NONPROD_SPACE=$(prompt_secret "CF_NONPROD_SPACE" "Nonprod CF space")
-
-    # Prod CF foundation
-    echo -e "\n${GREEN}--- Prod CF Foundation ---${NC}\n"
-    CF_PROD_API=$(prompt_secret "CF_PROD_API" "Prod CF API (e.g., https://api.sys.prod.example.com)")
-    CF_PROD_USERNAME=$(prompt_secret "CF_PROD_USERNAME" "Prod CF username")
-    CF_PROD_PASSWORD=$(prompt_password "CF_PROD_PASSWORD" "Prod CF password")
-    CF_PROD_ORG=$(prompt_secret "CF_PROD_ORG" "Prod CF organization")
-    CF_PROD_SPACE=$(prompt_secret "CF_PROD_SPACE" "Prod CF space")
-
-    # Confirm and set
-    echo ""
-    print_header "Setting Secrets"
-
-    set_secret "APP_UPSTREAM_REPO" "$APP_UPSTREAM_REPO"
-    set_secret "APP_NAME" "$APP_NAME"
-    set_secret "APP_ROUTE_NONPROD" "$APP_ROUTE_NONPROD"
-    set_secret "APP_ROUTE_PROD" "$APP_ROUTE_PROD"
-    set_secret "CF_NONPROD_API" "$CF_NONPROD_API"
-    set_secret "CF_NONPROD_USERNAME" "$CF_NONPROD_USERNAME"
-    set_secret "CF_NONPROD_PASSWORD" "$CF_NONPROD_PASSWORD"
-    set_secret "CF_NONPROD_ORG" "$CF_NONPROD_ORG"
-    set_secret "CF_NONPROD_SPACE" "$CF_NONPROD_SPACE"
-    set_secret "CF_PROD_API" "$CF_PROD_API"
-    set_secret "CF_PROD_USERNAME" "$CF_PROD_USERNAME"
-    set_secret "CF_PROD_PASSWORD" "$CF_PROD_PASSWORD"
-    set_secret "CF_PROD_ORG" "$CF_PROD_ORG"
-    set_secret "CF_PROD_SPACE" "$CF_PROD_SPACE"
-
-    print_success "Blue-green deployment secrets configured!"
+    print_success "Blue-green deployment configured! ($success_count secrets set)"
 }
 
 # Main menu
 main() {
+    clear 2>/dev/null || true
+
     print_header "CF Deployment Secrets Setup"
 
     check_gh_cli
 
-    echo "Which workflow do you want to configure?"
     echo ""
-    echo "  1) Standard Deployment (deploy.yml)"
-    echo "     - Single CF foundation"
-    echo "     - Dev and Prod spaces"
+    echo "Select the workflow you want to configure:"
     echo ""
-    echo "  2) Blue-Green Deployment (blue-green-deploy.yml)"
-    echo "     - Separate nonprod/prod CF foundations"
-    echo "     - Zero-downtime deployments"
+    echo -e "  ${BOLD}1)${NC} Standard Deployment ${DIM}(deploy.yml)${NC}"
+    echo "     Single CF foundation with Dev → Prod pipeline"
+    echo "     8 secrets required"
     echo ""
-    echo "  3) Both workflows"
+    echo -e "  ${BOLD}2)${NC} Blue-Green Deployment ${DIM}(blue-green-deploy.yml)${NC}"
+    echo "     Separate CF foundations, zero-downtime deploys"
+    echo "     14 secrets required"
     echo ""
+    echo -e "  ${BOLD}3)${NC} Both workflows"
+    echo ""
+
     read -p "Enter choice [1-3]: " choice
 
     case $choice in
@@ -217,12 +318,18 @@ main() {
             ;;
     esac
 
-    echo ""
     print_header "Setup Complete"
-    echo "Don't forget to create the 'production' environment in:"
-    echo "  Settings > Environments > New environment"
+
+    echo -e "${BOLD}Next steps:${NC}"
     echo ""
-    echo "Enable 'Required reviewers' for manual approval before prod deployments."
+    echo "1. Create the 'production' environment for manual approval:"
+    echo -e "   ${DIM}Settings > Environments > New environment > 'production'${NC}"
+    echo ""
+    echo "2. Enable 'Required reviewers' on the production environment"
+    echo ""
+    echo "3. Verify your secrets in GitHub:"
+    echo -e "   ${DIM}Settings > Secrets and variables > Actions${NC}"
+    echo ""
 }
 
 main "$@"
