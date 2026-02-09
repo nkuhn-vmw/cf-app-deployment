@@ -110,13 +110,59 @@ show_value() {
     local name="$1"
     local value="$2"
 
-    if [[ "$name" == *"PASSWORD"* ]]; then
+    if [[ "$name" == *"PASSWORD"* ]] || [[ "$name" == *"TOKEN"* ]]; then
         echo -e "  ${BOLD}$name${NC}: ${DIM}(hidden)${NC}"
     elif [ -z "$value" ]; then
         echo -e "  ${BOLD}$name${NC}: ${YELLOW}(empty - will be skipped)${NC}"
     else
         echo -e "  ${BOLD}$name${NC}: $value"
     fi
+}
+
+# Show what secrets are needed for multi-app GHE deployment
+show_multi_app_requirements() {
+    print_header "Multi-App GHE Deployment - Required Secrets"
+
+    echo "This workflow deploys TWO applications to Cloud Foundry via"
+    echo "GitHub Enterprise Server, with separate Nonprod and Prod foundations"
+    echo "and an email-based approval gate for production."
+    echo ""
+    echo -e "${BOLD}Before you begin, gather the following information:${NC}"
+    echo ""
+    echo -e "${CYAN}GitHub Enterprise Server:${NC}"
+    print_bullet "GHE_HOST               - GHE hostname (e.g., github.mycompany.com)"
+    print_bullet "GHE_TOKEN              - Personal Access Token for GHE API access"
+    echo ""
+    echo -e "${CYAN}Application Configuration:${NC}"
+    print_bullet "APP_UPSTREAM_REPO      - GHE repo to pull releases from"
+    print_bullet "APP1_NAME              - Application 1 base name"
+    print_bullet "APP1_MANIFEST_PATH     - Path to app1 manifest in this repo"
+    print_bullet "APP1_ARTIFACT_PATTERN  - Release asset pattern for app1"
+    print_bullet "APP2_NAME              - Application 2 base name"
+    print_bullet "APP2_MANIFEST_PATH     - Path to app2 manifest in this repo"
+    print_bullet "APP2_ARTIFACT_PATTERN  - Release asset pattern for app2"
+    echo ""
+    echo -e "${CYAN}Nonprod CF Foundation:${NC}"
+    print_bullet "CF_NONPROD_API         - Nonprod API endpoint"
+    print_bullet "CF_NONPROD_USERNAME    - Nonprod service account"
+    print_bullet "CF_NONPROD_PASSWORD    - Nonprod password"
+    print_bullet "CF_NONPROD_ORG         - Nonprod organization"
+    print_bullet "CF_NONPROD_SPACE       - Nonprod space"
+    echo ""
+    echo -e "${CYAN}Prod CF Foundation:${NC}"
+    print_bullet "CF_PROD_API            - Prod API endpoint"
+    print_bullet "CF_PROD_USERNAME       - Prod service account"
+    print_bullet "CF_PROD_PASSWORD       - Prod password"
+    print_bullet "CF_PROD_ORG            - Prod organization"
+    print_bullet "CF_PROD_SPACE          - Prod space"
+    echo ""
+    echo -e "${CYAN}Approval Gate:${NC}"
+    print_bullet "APPROVAL_REVIEWERS     - Comma-separated GHE usernames for notifications"
+    echo ""
+    echo -e "${DIM}Total: 20 secrets to configure${NC}"
+    echo ""
+
+    read -p "Press Enter when ready to continue (or Ctrl+C to cancel)..."
 }
 
 # Show what secrets are needed for standard deployment
@@ -314,6 +360,113 @@ setup_blue_green_deploy() {
     print_success "Blue-green deployment configured! ($success_count secrets set)"
 }
 
+# Setup secrets for multi-app GHE deployment
+setup_multi_app_deploy() {
+    show_multi_app_requirements
+
+    print_header "Enter Secret Values"
+
+    print_subheader "GitHub Enterprise Server"
+    prompt_secret "GHE_HOST" "github.mycompany.com"
+    prompt_password "GHE_TOKEN"
+
+    print_subheader "Application Configuration"
+    prompt_secret "APP_UPSTREAM_REPO" "org/repo-name"
+    prompt_secret "APP1_NAME" "my-api"
+    prompt_secret "APP1_MANIFEST_PATH" "manifests/app1/manifest.yml"
+    prompt_secret "APP1_ARTIFACT_PATTERN" "my-api-{version}.jar"
+    prompt_secret "APP2_NAME" "my-worker"
+    prompt_secret "APP2_MANIFEST_PATH" "manifests/app2/manifest.yml"
+    prompt_secret "APP2_ARTIFACT_PATTERN" "my-worker-{version}.jar"
+
+    print_subheader "Nonprod CF Foundation"
+    prompt_secret "CF_NONPROD_API" "https://api.sys.nonprod.example.com"
+    prompt_secret "CF_NONPROD_USERNAME" "cf-deployer"
+    prompt_password "CF_NONPROD_PASSWORD"
+    prompt_secret "CF_NONPROD_ORG" "my-org"
+    prompt_secret "CF_NONPROD_SPACE" "nonprod"
+
+    print_subheader "Prod CF Foundation"
+    prompt_secret "CF_PROD_API" "https://api.sys.prod.example.com"
+    prompt_secret "CF_PROD_USERNAME" "cf-deployer"
+    prompt_password "CF_PROD_PASSWORD"
+    prompt_secret "CF_PROD_ORG" "my-org"
+    prompt_secret "CF_PROD_SPACE" "prod"
+
+    print_subheader "Approval Gate"
+    prompt_secret "APPROVAL_REVIEWERS" "user1,user2,team-lead"
+
+    # Confirmation
+    print_header "Review Your Configuration"
+
+    echo "Please verify these values before setting the secrets:"
+    echo ""
+    echo -e "${CYAN}GitHub Enterprise:${NC}"
+    show_value "GHE_HOST" "$GHE_HOST"
+    show_value "GHE_TOKEN" "$GHE_TOKEN"
+    echo ""
+    echo -e "${CYAN}Application Configuration:${NC}"
+    show_value "APP_UPSTREAM_REPO" "$APP_UPSTREAM_REPO"
+    show_value "APP1_NAME" "$APP1_NAME"
+    show_value "APP1_MANIFEST_PATH" "$APP1_MANIFEST_PATH"
+    show_value "APP1_ARTIFACT_PATTERN" "$APP1_ARTIFACT_PATTERN"
+    show_value "APP2_NAME" "$APP2_NAME"
+    show_value "APP2_MANIFEST_PATH" "$APP2_MANIFEST_PATH"
+    show_value "APP2_ARTIFACT_PATTERN" "$APP2_ARTIFACT_PATTERN"
+    echo ""
+    echo -e "${CYAN}Nonprod CF Foundation:${NC}"
+    show_value "CF_NONPROD_API" "$CF_NONPROD_API"
+    show_value "CF_NONPROD_USERNAME" "$CF_NONPROD_USERNAME"
+    show_value "CF_NONPROD_PASSWORD" "$CF_NONPROD_PASSWORD"
+    show_value "CF_NONPROD_ORG" "$CF_NONPROD_ORG"
+    show_value "CF_NONPROD_SPACE" "$CF_NONPROD_SPACE"
+    echo ""
+    echo -e "${CYAN}Prod CF Foundation:${NC}"
+    show_value "CF_PROD_API" "$CF_PROD_API"
+    show_value "CF_PROD_USERNAME" "$CF_PROD_USERNAME"
+    show_value "CF_PROD_PASSWORD" "$CF_PROD_PASSWORD"
+    show_value "CF_PROD_ORG" "$CF_PROD_ORG"
+    show_value "CF_PROD_SPACE" "$CF_PROD_SPACE"
+    echo ""
+    echo -e "${CYAN}Approval Gate:${NC}"
+    show_value "APPROVAL_REVIEWERS" "$APPROVAL_REVIEWERS"
+
+    echo ""
+    read -p "Set these secrets? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo ""
+        print_warning "Cancelled. No secrets were set."
+        exit 0
+    fi
+
+    print_header "Setting GitHub Secrets"
+
+    local success_count=0
+    set_secret "GHE_HOST" "$GHE_HOST" && ((success_count++)) || true
+    set_secret "GHE_TOKEN" "$GHE_TOKEN" && ((success_count++)) || true
+    set_secret "APP_UPSTREAM_REPO" "$APP_UPSTREAM_REPO" && ((success_count++)) || true
+    set_secret "APP1_NAME" "$APP1_NAME" && ((success_count++)) || true
+    set_secret "APP1_MANIFEST_PATH" "$APP1_MANIFEST_PATH" && ((success_count++)) || true
+    set_secret "APP1_ARTIFACT_PATTERN" "$APP1_ARTIFACT_PATTERN" && ((success_count++)) || true
+    set_secret "APP2_NAME" "$APP2_NAME" && ((success_count++)) || true
+    set_secret "APP2_MANIFEST_PATH" "$APP2_MANIFEST_PATH" && ((success_count++)) || true
+    set_secret "APP2_ARTIFACT_PATTERN" "$APP2_ARTIFACT_PATTERN" && ((success_count++)) || true
+    set_secret "CF_NONPROD_API" "$CF_NONPROD_API" && ((success_count++)) || true
+    set_secret "CF_NONPROD_USERNAME" "$CF_NONPROD_USERNAME" && ((success_count++)) || true
+    set_secret "CF_NONPROD_PASSWORD" "$CF_NONPROD_PASSWORD" && ((success_count++)) || true
+    set_secret "CF_NONPROD_ORG" "$CF_NONPROD_ORG" && ((success_count++)) || true
+    set_secret "CF_NONPROD_SPACE" "$CF_NONPROD_SPACE" && ((success_count++)) || true
+    set_secret "CF_PROD_API" "$CF_PROD_API" && ((success_count++)) || true
+    set_secret "CF_PROD_USERNAME" "$CF_PROD_USERNAME" && ((success_count++)) || true
+    set_secret "CF_PROD_PASSWORD" "$CF_PROD_PASSWORD" && ((success_count++)) || true
+    set_secret "CF_PROD_ORG" "$CF_PROD_ORG" && ((success_count++)) || true
+    set_secret "CF_PROD_SPACE" "$CF_PROD_SPACE" && ((success_count++)) || true
+    set_secret "APPROVAL_REVIEWERS" "$APPROVAL_REVIEWERS" && ((success_count++)) || true
+
+    echo ""
+    print_success "Multi-app GHE deployment configured! ($success_count secrets set)"
+}
+
 # Main menu
 main() {
     clear 2>/dev/null || true
@@ -333,10 +486,14 @@ main() {
     echo "     Separate CF foundations, zero-downtime deploys"
     echo "     14 secrets required"
     echo ""
-    echo -e "  ${BOLD}3)${NC} Both workflows"
+    echo -e "  ${BOLD}3)${NC} Multi-App GHE Deployment ${DIM}(multi-app-deploy.yml)${NC}"
+    echo "     Two apps, GitHub Enterprise, email approval gate"
+    echo "     20 secrets required"
+    echo ""
+    echo -e "  ${BOLD}4)${NC} All workflows"
     echo ""
 
-    read -p "Enter choice [1-3]: " choice
+    read -p "Enter choice [1-4]: " choice
 
     case $choice in
         1)
@@ -346,8 +503,12 @@ main() {
             setup_blue_green_deploy
             ;;
         3)
+            setup_multi_app_deploy
+            ;;
+        4)
             setup_standard_deploy
             setup_blue_green_deploy
+            setup_multi_app_deploy
             ;;
         *)
             print_error "Invalid choice"
@@ -363,10 +524,21 @@ main() {
     echo -e "   ${DIM}Settings > Environments > New environment > 'production'${NC}"
     echo ""
     echo "2. Enable 'Required reviewers' on the production environment"
+    echo -e "   ${DIM}Add the users/teams who should approve production deployments${NC}"
+    echo -e "   ${DIM}GHE will email these reviewers when approval is needed${NC}"
     echo ""
     echo "3. Verify your secrets in GitHub:"
     echo -e "   ${DIM}Settings > Secrets and variables > Actions${NC}"
     echo ""
+    if [ "$choice" = "3" ] || [ "$choice" = "4" ]; then
+        echo "4. Update the CF manifest files for your applications:"
+        echo -e "   ${DIM}manifests/app1/manifest.yml${NC}"
+        echo -e "   ${DIM}manifests/app2/manifest.yml${NC}"
+        echo ""
+        echo "5. Ensure your GHE PAT has these scopes:"
+        echo -e "   ${DIM}repo, read:org, workflow${NC}"
+        echo ""
+    fi
 }
 
 main "$@"

@@ -1,0 +1,11 @@
+---
+applications:
+- name: ((APP_NAME))
+  memory: 1G
+  disk_quota: 512M
+  instances: 1
+  buildpacks:
+  - java_buildpack
+  env:
+    JBP_CONFIG_OPEN_JDK_JRE: '{ jre: { version: 17.+ } }'
+    SPRING_PROFILES_ACTIVE: cloud
